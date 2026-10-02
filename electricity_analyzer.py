@@ -304,13 +304,11 @@ def process_uci_format(df_raw):
         return None
 
 def parse_text_input(text_input):
-    """Parse electricity data from text input (CSV format or JSON-like)"""
+    """Parse electricity data from text input (CSV format)"""
     try:
-        # Try parsing as CSV
         from io import StringIO
         df = pd.read_csv(StringIO(text_input))
         
-        # Ensure required columns exist
         if df.empty:
             return None
         
@@ -341,14 +339,11 @@ def parse_text_input(text_input):
 def parse_text_file(uploaded_file):
     """Parse electricity data from uploaded text file (.txt)"""
     try:
-        # Read the text file content
         text_content = uploaded_file.read().decode('utf-8')
         
-        # Try parsing as CSV
         from io import StringIO
         df = pd.read_csv(StringIO(text_content))
         
-        # Ensure required columns exist
         if df.empty:
             return None
         
@@ -396,10 +391,7 @@ def calculate_anomalies(df, window_size, z_threshold):
         df_sorted['rolling_mean'] = df_sorted['power_kW'].rolling(window=window_size, min_periods=1).mean()
         df_sorted['rolling_std'] = df_sorted['power_kW'].rolling(window=window_size, min_periods=1).std()
         
-        # Calculate z-score
         df_sorted['z_score'] = (df_sorted['power_kW'] - df_sorted['rolling_mean']) / (df_sorted['rolling_std'] + 1e-8)
-        
-        # Identify anomalies
         df_sorted['is_anomaly'] = abs(df_sorted['z_score']) > z_threshold
         
         return df_sorted
@@ -408,6 +400,10 @@ def calculate_anomalies(df, window_size, z_threshold):
         return df
 
 def main():
+    # Initialize df_processed in session state
+    if 'df_processed' not in st.session_state:
+        st.session_state.df_processed = pd.DataFrame()
+    
     # Header
     st.markdown('<div class="futuristic-header">⚡ ELECTRICITY ANALYZER PRO</div>', unsafe_allow_html=True)
     st.markdown('<p style="text-align: center; color: #00d4ff; font-size: 1.1rem;">Advanced Analytics & Anomaly Detection System</p>', 
@@ -424,8 +420,6 @@ def main():
             help="Choose your data source"
         )
         
-        df_processed = pd.DataFrame()
-        
         if data_source == "📤 Upload CSV":
             st.markdown('<div class="subheader">CSV Upload</div>', unsafe_allow_html=True)
             uploaded_file = st.file_uploader(
@@ -438,9 +432,11 @@ def main():
                 try:
                     df = pd.read_csv(uploaded_file)
                     st.success(f"✅ File loaded: {len(df)} rows")
-                    df_processed = process_uci_format(df)
+                    df_result = process_uci_format(df)
                     
-                    if df_processed is None:
+                    if df_result is not None:
+                        st.session_state.df_processed = df_result
+                    else:
                         st.warning("⚠️ Could not auto-detect columns. Check your CSV format.")
                 except Exception as e:
                     st.error(f"❌ Error: {str(e)}")
@@ -455,9 +451,10 @@ def main():
             
             if uploaded_file is not None:
                 try:
-                    df_processed = parse_text_file(uploaded_file)
-                    if df_processed is not None:
-                        st.success(f"✅ Text file loaded: {len(df_processed)} rows")
+                    df_result = parse_text_file(uploaded_file)
+                    if df_result is not None:
+                        st.success(f"✅ Text file loaded: {len(df_result)} rows")
+                        st.session_state.df_processed = df_result
                     else:
                         st.warning("⚠️ Could not parse text file. Check your data format.")
                 except Exception as e:
@@ -474,14 +471,15 @@ def main():
             
             if st.button("🔄 Parse Text Data"):
                 if text_input.strip():
-                    df_processed = parse_text_input(text_input)
-                    if df_processed is not None:
-                        st.success(f"✅ Parsed {len(df_processed)} rows successfully!")
+                    df_result = parse_text_input(text_input)
+                    if df_result is not None:
+                        st.success(f"✅ Parsed {len(df_result)} rows successfully!")
+                        st.session_state.df_processed = df_result
                 else:
                     st.warning("⚠️ Please enter some data")
         
         else:  # Sample Data
-            df_processed = load_sample_data()
+            st.session_state.df_processed = load_sample_data()
             st.success("✅ Sample data loaded for demonstration")
         
         # Tariff settings
@@ -504,6 +502,8 @@ def main():
         z_threshold = st.slider("Z-Score Threshold", 1.0, 5.0, 2.5, 0.1)
     
     # Main content
+    df_processed = st.session_state.df_processed
+    
     if not df_processed.empty:
         # Display data overview metrics
         st.markdown('<div class="subheader">📈 DATA OVERVIEW</div>', unsafe_allow_html=True)
@@ -570,7 +570,6 @@ def main():
                 st.plotly_chart(fig, use_container_width=True)
             
             with col2:
-                # Hourly pattern
                 df_hourly = df_processed.copy()
                 df_hourly['hour'] = df_hourly['timestamp'].dt.hour
                 hourly_avg = df_hourly.groupby('hour')['power_kW'].mean()
@@ -601,7 +600,6 @@ def main():
             with col2:
                 st.metric("✅ Normal Points", len(df_anomalies) - anomaly_count)
             
-            # Anomaly visualization
             if anomaly_count > 0:
                 fig_anomaly = px.scatter(
                     df_anomalies,
@@ -621,7 +619,6 @@ def main():
                 )
                 st.plotly_chart(fig_anomaly, use_container_width=True)
                 
-                # Anomaly table
                 anomalies_df = df_anomalies[df_anomalies['is_anomaly']][['timestamp', 'department', 'power_kW', 'z_score']].head(20)
                 st.markdown('<p style="color: #ff0055; font-weight: bold;">⚠️ Top 20 Anomalies</p>', unsafe_allow_html=True)
                 st.dataframe(anomalies_df, use_container_width=True)
@@ -642,7 +639,6 @@ def main():
                 )
             
             with col2:
-                # Export as Excel
                 from io import BytesIO
                 output = BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
