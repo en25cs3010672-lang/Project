@@ -248,21 +248,24 @@ def normalize_dataframe(df):
             break
 
     if timestamp_col is None:
+        st.error(f"❌ No timestamp column found. Available columns: {list(df.columns)}")
         return None
 
     df = df.rename(columns={timestamp_col: 'timestamp'})
     df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
     df = df.dropna(subset=['timestamp']).copy()
     if df.empty:
+        st.error("❌ No valid timestamps found in data")
         return None
 
-    power_candidates = ['power_kW', 'power_kw', 'power', 'consumption_kw', 'consumption', 'value']
+    power_candidates = ['power_kw', 'power_kW', 'power', 'consumption_kw', 'consumption', 'value']
     power_col = None
     for candidate in power_candidates:
-        if candidate in col_map:
-            power_col = col_map[candidate]
+        if candidate.lower() in col_map:
+            power_col = col_map[candidate.lower()]
             break
     if power_col is None:
+        st.error(f"❌ No power column found. Available columns: {list(df.columns)}")
         return None
 
     df = df.rename(columns={power_col: 'power_kW'})
@@ -383,6 +386,7 @@ def parse_text_file(uploaded_file):
     try:
         raw_text = uploaded_file.read().decode('utf-8', errors='replace').strip()
         if not raw_text:
+            st.error("❌ File is empty")
             return None
 
         sep = detect_separator(raw_text)
@@ -474,15 +478,10 @@ def main():
             )
             
             if uploaded_file is not None:
-                try:
-                    df_result = parse_text_file(uploaded_file)
-                    if df_result is not None:
-                        st.success(f"✅ Text file loaded: {len(df_result)} rows")
-                        st.session_state.df_processed = df_result
-                    else:
-                        st.warning("⚠️ Could not parse text file. Check your data format.")
-                except Exception as e:
-                    st.error(f"❌ Error: {str(e)}")
+                df_result = parse_text_file(uploaded_file)
+                if df_result is not None:
+                    st.success(f"✅ Text file loaded: {len(df_result)} rows")
+                    st.session_state.df_processed = df_result
         
         elif data_source == "📝 Text Input":
             st.markdown('<div class="subheader">Text Input</div>', unsafe_allow_html=True)
