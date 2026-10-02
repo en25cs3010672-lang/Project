@@ -338,6 +338,44 @@ def parse_text_input(text_input):
         st.error(f"❌ Error parsing text input: {str(e)}")
         return None
 
+def parse_text_file(uploaded_file):
+    """Parse electricity data from uploaded text file (.txt)"""
+    try:
+        # Read the text file content
+        text_content = uploaded_file.read().decode('utf-8')
+        
+        # Try parsing as CSV
+        from io import StringIO
+        df = pd.read_csv(StringIO(text_content))
+        
+        # Ensure required columns exist
+        if df.empty:
+            return None
+        
+        # Auto-detect timestamp column
+        timestamp_col = None
+        for col in df.columns:
+            if col.lower() in ['timestamp', 'date', 'time', 'datetime', 'ts']:
+                timestamp_col = col
+                break
+        
+        if timestamp_col:
+            df[timestamp_col] = pd.to_datetime(df[timestamp_col], errors='coerce')
+            df = df.rename(columns={timestamp_col: 'timestamp'})
+        else:
+            st.warning("⚠️ Could not auto-detect timestamp column. Please ensure one of these column names exists: timestamp, date, time, datetime, ts")
+            return None
+        
+        df = df.dropna(subset=['timestamp'])
+        
+        if df.empty:
+            return None
+        
+        return df
+    except Exception as e:
+        st.error(f"❌ Error parsing text file: {str(e)}")
+        return None
+
 def load_sample_data():
     """Generate sample electricity consumption data"""
     dates = pd.date_range(start='2023-01-01', end='2023-12-31', freq='1H')
@@ -382,7 +420,7 @@ def main():
         
         data_source = st.radio(
             "Select Input Method:",
-            ["📤 Upload CSV", "📝 Text Input", "🎲 Sample Data"],
+            ["📤 Upload CSV", "📄 Upload Text File", "📝 Text Input", "🎲 Sample Data"],
             help="Choose your data source"
         )
         
@@ -404,6 +442,24 @@ def main():
                     
                     if df_processed is None:
                         st.warning("⚠️ Could not auto-detect columns. Check your CSV format.")
+                except Exception as e:
+                    st.error(f"❌ Error: {str(e)}")
+        
+        elif data_source == "📄 Upload Text File":
+            st.markdown('<div class="subheader">Text File Upload</div>', unsafe_allow_html=True)
+            uploaded_file = st.file_uploader(
+                "Drop your text file here or click to browse",
+                type="txt",
+                help="Upload a .txt file containing CSV-formatted data"
+            )
+            
+            if uploaded_file is not None:
+                try:
+                    df_processed = parse_text_file(uploaded_file)
+                    if df_processed is not None:
+                        st.success(f"✅ Text file loaded: {len(df_processed)} rows")
+                    else:
+                        st.warning("⚠️ Could not parse text file. Check your data format.")
                 except Exception as e:
                     st.error(f"❌ Error: {str(e)}")
         
