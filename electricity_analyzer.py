@@ -1,3 +1,35 @@
+import streamlit as st
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from datetime import datetime, timedelta
+import plotly.express as px
+import plotly.graph_objects as go
+
+# Page configuration
+st.set_page_config(
+    page_title="Electricity Analyzer",
+    page_icon="⚡",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Custom CSS
+st.markdown("""
+    <style>
+    .main {
+        padding: 2rem;
+    }
+    .metric-card {
+        background-color: #f0f2f6;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        margin: 0.5rem 0;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
 def process_uci_format(df_raw):
     """Process the UCI Household Power Consumption dataset format"""
     try:
@@ -27,9 +59,6 @@ def process_uci_format(df_raw):
                         break
 
         # Check if we have the minimum required columns
-        # We need at least Date, Time, and one power column to be useful
-        required_cols = ['Date', 'Time', 'Global_active_power', 'Sub_metering_1', 'Sub_metering_2', 'Sub_metering_3']
-        # Check if we have Date, Time, and at least one of the power columns
         power_cols_found = sum(1 for col in ['Global_active_power', 'Sub_metering_1', 'Sub_metering_2', 'Sub_metering_3']
                               if col in col_mapping)
         if not ('Date' in col_mapping and 'Time' in col_mapping and power_cols_found >= 1):
@@ -101,6 +130,132 @@ def process_uci_format(df_raw):
         return result_df
 
     except Exception as e:
-        # Log the error for debugging (in a real app, you might use st.exception or logging)
-        # For now, just return None to fall back to standard CSV reading
+        st.error(f"Error processing data: {str(e)}")
         return None
+
+def load_sample_data():
+    """Generate sample electricity consumption data"""
+    dates = pd.date_range(start='2023-01-01', end='2023-12-31', freq='1H')
+    np.random.seed(42)
+    
+    data = {
+        'timestamp': dates,
+        'department': np.random.choice(['Sub_metering_1', 'Sub_metering_2', 'Sub_metering_3', 'Total_Consumption'], len(dates)),
+        'power_kW': np.abs(np.random.normal(2.0, 0.5, len(dates)))
+    }
+    
+    return pd.DataFrame(data)
+
+def main():
+    # Header
+    st.title("⚡ Electricity Consumption Analyzer")
+    st.markdown("Analyze electricity consumption patterns, detect anomalies, and visualize trends")
+    
+    # Sidebar
+    with st.sidebar:
+        st.header("📊 Configuration")
+        
+        data_source = st.radio(
+            "Data Source",
+            ["Upload CSV", "Use Sample Data"],
+            help="Choose how to load your data"
+        )
+        
+        if data_source == "Upload CSV":
+            uploaded_file = st.file_uploader(
+                "Choose a CSV file",
+                type="csv",
+                help="Accepts CSV files with timestamp and power consumption columns"
+            )
+            
+            if uploaded_file is not None:
+                try:
+                    df = pd.read_csv(uploaded_file)
+                    st.success(f"✅ File loaded: {len(df)} rows")
+                    df_processed = process_uci_format(df)
+                    
+                    if df_processed is None:
+                        df_processed = pd.DataFrame()
+                        st.warning("Could not auto-detect columns. Please check your CSV format.")
+                except Exception as e:
+                    st.error(f"Error reading file: {str(e)}")
+                    df_processed = pd.DataFrame()
+            else:
+                df_processed = pd.DataFrame()
+        else:
+            df_processed = load_sample_data()
+            st.info("📌 Using sample data for demonstration")
+        
+        # Tariff settings
+        st.subheader("💰 Tariff Settings")
+        base_rate = st.slider("Base Rate ($/kWh)", 0.01, 2.0, 0.15, 0.01)
+        use_tod = st.checkbox("Enable Time-of-Day Rates")
+        
+        if use_tod:
+            peak_rate = st.slider("Peak Rate ($/kWh)", 0.01, 2.0, 0.25, 0.01)
+            off_peak_rate = st.slider("Off-Peak Rate ($/kWh)", 0.01, 2.0, 0.10, 0.01)
+            peak_hours = st.slider("Peak Hours", 0, 23, (9, 21))
+        else:
+            peak_rate = base_rate
+            off_peak_rate = base_rate
+            peak_hours = (0, 24)
+        
+        # Anomaly detection settings
+        st.subheader("🔍 Anomaly Detection")
+        window_size = st.slider("Rolling Window (hours)", 1, 24, 3)
+        z_threshold = st.slider("Z-Score Threshold", 1.0, 5.0, 2.5, 0.1)
+    
+    # Main content
+    if not df_processed.empty:
+        # Display data overview
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric("Total Records", len(df_processed))
+        with col2:
+            st.metric("Date Range", f"{df_processed['timestamp'].min().strftime('%Y-%m-%d')} to {df_processed['timestamp'].max().strftime('%Y-%m-%d')}")
+        with col3:
+            st.metric("Departments", df_processed['department'].nunique())
+        with col4:
+            st.metric("Avg Power (kW)", f"{df_processed['power_kW'].mean():.2f}")
+        
+        # Tabs for different views
+        tab1, tab2, tab3, tab4 = st.tabs(["📈 Overview", "📊 Analysis", "🔍 Anomalies", "📥 Data"])
+        
+        with tab1:
+            st.subheader("Power Consumption Trend")
+            fig = px.line(df_processed, x='timestamp', y='power_kW', color='department', 
+                         title="Power Consumption Over Time")
+            st.plotly_chart(fig, use_container_width=True)
+        
+        with tab2:
+            st.subheader("Consumption by Department")
+            dept_summary = df_processed.groupby('department')['power_kW'].agg(['mean', 'max', 'min']).reset_index()
+            st.dataframe(dept_summary, use_container_width=True)
+            
+            fig = px.bar(dept_summary, x='department', y='mean', title="Average Power by Department")
+            st.plotly_chart(fig, use_container_width=True)
+        
+        with tab3:
+            st.subheader("Anomaly Detection Results")
+            st.info("Anomaly detection using z-score on rolling averages")
+            # Placeholder for anomaly detection logic
+            st.write("Anomaly detection would be performed here based on z-score threshold")
+        
+        with tab4:
+            st.subheader("Data Preview")
+            st.dataframe(df_processed.head(50), use_container_width=True)
+            
+            # Download button
+            csv = df_processed.to_csv(index=False)
+            st.download_button(
+                label="📥 Download Processed Data",
+                data=csv,
+                file_name="electricity_data_processed.csv",
+                mime="text/csv"
+            )
+    else:
+        st.warning("⚠️ No data loaded. Please upload a CSV file or select sample data.")
+
+if __name__ == "__main__":
+    main()
