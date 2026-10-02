@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 import plotly.express as px
 import plotly.graph_objects as go
 import io
+import csv
 
 # Page configuration
 st.set_page_config(
@@ -216,6 +217,64 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+
+def detect_separator(text):
+    """Try to detect the CSV delimiter."""
+    sample = text[:4096]
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=',;\t|')
+        return dialect.delimiter
+    except Exception:
+        if ';' in sample and ',' not in sample:
+            return ';'
+        if '\t' in sample and ',' not in sample:
+            return '\t'
+        return ','
+
+
+def normalize_dataframe(df):
+    """Normalize imported table to the app's expected columns."""
+    if df is None or df.empty:
+        return None
+
+    df = df.copy()
+    df.columns = [str(col).strip() for col in df.columns]
+
+    col_map = {str(col).strip().lower(): col for col in df.columns}
+    timestamp_col = None
+    for name in ['timestamp', 'datetime', 'date', 'time', 'ts', 'date_time']:
+        if name in col_map:
+            timestamp_col = col_map[name]
+            break
+
+    if timestamp_col is None:
+        return None
+
+    df = df.rename(columns={timestamp_col: 'timestamp'})
+    df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
+    df = df.dropna(subset=['timestamp']).copy()
+    if df.empty:
+        return None
+
+    power_candidates = ['power_kW', 'power_kw', 'power', 'consumption_kw', 'consumption', 'value']
+    power_col = None
+    for candidate in power_candidates:
+        if candidate in col_map:
+            power_col = col_map[candidate]
+            break
+    if power_col is None:
+        return None
+
+    df = df.rename(columns={power_col: 'power_kW'})
+
+    if 'department' not in df.columns:
+        df['department'] = 'Total_Consumption'
+
+    # Keep only the data the app uses
+    df = df[['timestamp', 'department', 'power_kW']].copy()
+    return df
+
+
 def process_uci_format(df_raw):
     """Process the UCI Household Power Consumption dataset format"""
     try:
@@ -303,73 +362,36 @@ def process_uci_format(df_raw):
         st.error(f"Error processing data: {str(e)}")
         return None
 
+
 def parse_text_input(text_input):
-    """Parse electricity data from text input (CSV format)"""
+    """Parse electricity data from pasted text or CSV content."""
     try:
-        from io import StringIO
-        df = pd.read_csv(StringIO(text_input))
-        
-        if df.empty:
+        text = str(text_input).strip()
+        if not text:
             return None
-        
-        # Auto-detect timestamp column
-        timestamp_col = None
-        for col in df.columns:
-            if col.lower() in ['timestamp', 'date', 'time', 'datetime', 'ts']:
-                timestamp_col = col
-                break
-        
-        if timestamp_col:
-            df[timestamp_col] = pd.to_datetime(df[timestamp_col], errors='coerce')
-            df = df.rename(columns={timestamp_col: 'timestamp'})
-        else:
-            st.warning("⚠️ Could not auto-detect timestamp column. Please ensure one of these column names exists: timestamp, date, time, datetime, ts")
-            return None
-        
-        df = df.dropna(subset=['timestamp'])
-        
-        if df.empty:
-            return None
-        
-        return df
+
+        sep = detect_separator(text)
+        df = pd.read_csv(io.StringIO(text), sep=sep, engine='python')
+        return normalize_dataframe(df)
     except Exception as e:
         st.error(f"❌ Error parsing text input: {str(e)}")
         return None
 
+
 def parse_text_file(uploaded_file):
     """Parse electricity data from uploaded text file (.txt)"""
     try:
-        text_content = uploaded_file.read().decode('utf-8')
-        
-        from io import StringIO
-        df = pd.read_csv(StringIO(text_content))
-        
-        if df.empty:
+        raw_text = uploaded_file.read().decode('utf-8', errors='replace').strip()
+        if not raw_text:
             return None
-        
-        # Auto-detect timestamp column
-        timestamp_col = None
-        for col in df.columns:
-            if col.lower() in ['timestamp', 'date', 'time', 'datetime', 'ts']:
-                timestamp_col = col
-                break
-        
-        if timestamp_col:
-            df[timestamp_col] = pd.to_datetime(df[timestamp_col], errors='coerce')
-            df = df.rename(columns={timestamp_col: 'timestamp'})
-        else:
-            st.warning("⚠️ Could not auto-detect timestamp column. Please ensure one of these column names exists: timestamp, date, time, datetime, ts")
-            return None
-        
-        df = df.dropna(subset=['timestamp'])
-        
-        if df.empty:
-            return None
-        
-        return df
+
+        sep = detect_separator(raw_text)
+        df = pd.read_csv(io.StringIO(raw_text), sep=sep, engine='python')
+        return normalize_dataframe(df)
     except Exception as e:
         st.error(f"❌ Error parsing text file: {str(e)}")
         return None
+
 
 def load_sample_data():
     """Generate sample electricity consumption data"""
@@ -383,6 +405,7 @@ def load_sample_data():
     }
     
     return pd.DataFrame(data)
+
 
 def calculate_anomalies(df, window_size, z_threshold):
     """Calculate anomalies using z-score"""
@@ -398,6 +421,7 @@ def calculate_anomalies(df, window_size, z_threshold):
     except Exception as e:
         st.error(f"Error calculating anomalies: {str(e)}")
         return df
+
 
 def main():
     # Initialize df_processed in session state
@@ -465,7 +489,7 @@ def main():
             text_input = st.text_area(
                 "Paste CSV data here:",
                 height=150,
-                placeholder="timestamp,department,power_kW\n2023-01-01 00:00,Sub_metering_1,1.5\n2023-01-01 01:00,Sub_metering_2,2.3\n...",
+                placeholder="datetime,department,power_kW\n2023-01-01 00:00,Sub_metering_1,1.5\n2023-01-01 01:00,Sub_metering_2,2.3\n...",
                 help="Enter data in CSV format with columns: timestamp, department, power_kW"
             )
             
@@ -505,7 +529,6 @@ def main():
     df_processed = st.session_state.df_processed
     
     if not df_processed.empty:
-        # Display data overview metrics
         st.markdown('<div class="subheader">📈 DATA OVERVIEW</div>', unsafe_allow_html=True)
         col1, col2, col3, col4 = st.columns(4)
         
@@ -521,7 +544,6 @@ def main():
         
         st.markdown('<div class="neon-divider"></div>', unsafe_allow_html=True)
         
-        # Tabs for different views
         tab1, tab2, tab3, tab4, tab5 = st.tabs(["📈 Trends", "📊 Analysis", "🔍 Anomalies", "💾 Data Export", "⚙️ Stats"])
         
         with tab1:
